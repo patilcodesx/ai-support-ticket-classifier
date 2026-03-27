@@ -117,7 +117,7 @@ src/main/java/com/ticket/classifier/
 │   ├── AdminService.java
 │   ├── AuthService.java
 │   ├── EmailService.java
-│   ├── GeminiService.java   ← calls Groq API
+│   ├── GroqService.java   ← calls Groq API
 │   └── TicketService.java
 └── TicketClassifierApplication.java
 ```
