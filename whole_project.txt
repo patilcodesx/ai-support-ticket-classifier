@@ -1,0 +1,1193 @@
+FILE: ./docker-compose.yml
+==========================================
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: ticket_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: ticket_classifier
+      MYSQL_USER: ticket_user
+      MYSQL_PASSWORD: Ticket@123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: ticket_app
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/ticket_classifier
+      SPRING_DATASOURCE_USERNAME: ticket_user
+      SPRING_DATASOURCE_PASSWORD: Ticket@123
+
+volumes:
+  mysql_data:
+FILE: ./Dockerfile
+==========================================
+FROM eclipse-temurin:17-jdk-alpine
+WORKDIR /app
+COPY target/classifier-0.0.1-SNAPSHOT.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
+FILE: ./pom.xml
+==========================================
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.0</version>
+    </parent>
+    <groupId>com.ticket</groupId>
+    <artifactId>classifier</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>classifier</name>
+
+    <properties>
+        <java.version>17</java.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.11.5</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.11.5</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.11.5</version>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+FILE: ./src/main/java/com/ticket/classifier/config/JwtConfig.java
+==========================================
+package com.ticket.classifier.config;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
+import lombok.Getter;
+import lombok.Setter;
+
+@Configuration
+@ConfigurationProperties(prefix = "app.jwt")
+@Getter
+@Setter
+public class JwtConfig {
+    private String secret;
+    private long expiration;
+}
+FILE: ./src/main/java/com/ticket/classifier/config/SecurityConfig.java
+==========================================
+package com.ticket.classifier.config;
+
+import com.ticket.classifier.security.JwtFilter;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.*;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+@Configuration
+@EnableMethodSecurity
+@RequiredArgsConstructor
+public class SecurityConfig {
+
+    private final JwtFilter jwtFilter;
+    private final UserDetailsService userDetailsService;
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/auth/**").permitAll()
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+        return http.build();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+
+    @Bean
+    public DaoAuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setUserDetailsService(userDetailsService);
+        provider.setPasswordEncoder(passwordEncoder());
+        return provider;
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/controller/AdminController.java
+==========================================
+package com.ticket.classifier.controller;
+
+import com.ticket.classifier.dto.response.TicketResponse;
+import com.ticket.classifier.entity.User;
+import com.ticket.classifier.enums.TicketStatus;
+import com.ticket.classifier.service.AdminService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/admin")
+@RequiredArgsConstructor
+@PreAuthorize("hasRole('ADMIN')")
+public class AdminController {
+
+    private final AdminService adminService;
+
+    @GetMapping("/tickets")
+    public ResponseEntity<List<TicketResponse>> getAllTickets() {
+        return ResponseEntity.ok(adminService.getAllTickets());
+    }
+
+    @GetMapping("/tickets/flagged")
+    public ResponseEntity<List<TicketResponse>> getFlaggedTickets() {
+        return ResponseEntity.ok(adminService.getFlaggedTickets());
+    }
+
+    @GetMapping("/tickets/status/{status}")
+    public ResponseEntity<List<TicketResponse>> getByStatus(@PathVariable TicketStatus status) {
+        return ResponseEntity.ok(adminService.getTicketsByStatus(status));
+    }
+
+    @GetMapping("/agents")
+    public ResponseEntity<List<User>> getAllAgents() {
+        return ResponseEntity.ok(adminService.getAllAgents());
+    }
+
+    @PutMapping("/tickets/{ticketId}/assign/{agentId}")
+    public ResponseEntity<TicketResponse> assignTicket(@PathVariable Long ticketId,
+                                                        @PathVariable Long agentId) {
+        return ResponseEntity.ok(adminService.assignTicketToAgent(ticketId, agentId));
+    }
+
+    @PutMapping("/tickets/{ticketId}/resolve")
+    public ResponseEntity<TicketResponse> resolveTicket(@PathVariable Long ticketId) {
+        return ResponseEntity.ok(adminService.resolveTicket(ticketId));
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/controller/AuthController.java
+==========================================
+package com.ticket.classifier.controller;
+
+import com.ticket.classifier.dto.request.LoginRequest;
+import com.ticket.classifier.dto.request.RegisterRequest;
+import com.ticket.classifier.dto.response.LoginResponse;
+import com.ticket.classifier.service.AuthService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/auth")
+@RequiredArgsConstructor
+public class AuthController {
+
+    private final AuthService authService;
+
+    @PostMapping("/register")
+    public ResponseEntity<String> register(@Valid @RequestBody RegisterRequest request) {
+        return ResponseEntity.ok(authService.register(request));
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
+        return ResponseEntity.ok(authService.login(request));
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/controller/TicketController.java
+==========================================
+package com.ticket.classifier.controller;
+
+import com.ticket.classifier.dto.request.TicketRequest;
+import com.ticket.classifier.dto.response.TicketResponse;
+import com.ticket.classifier.service.TicketService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/tickets")
+@RequiredArgsConstructor
+public class TicketController {
+
+    private final TicketService ticketService;
+
+    @PostMapping
+    public ResponseEntity<TicketResponse> createTicket(@Valid @RequestBody TicketRequest request) {
+        return ResponseEntity.ok(ticketService.createTicket(request));
+    }
+
+    @GetMapping("/my")
+    public ResponseEntity<List<TicketResponse>> getMyTickets() {
+        return ResponseEntity.ok(ticketService.getMyTickets());
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<TicketResponse> getTicketById(@PathVariable Long id) {
+        return ResponseEntity.ok(ticketService.getTicketById(id));
+    }
+
+    @PutMapping("/{id}/resolve")
+    public ResponseEntity<TicketResponse> resolveTicket(@PathVariable Long id) {
+        return ResponseEntity.ok(ticketService.resolveTicket(id));
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/dto/request/LoginRequest.java
+==========================================
+package com.ticket.classifier.dto.request;
+
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import lombok.Data;
+
+@Data
+public class LoginRequest {
+    @Email @NotBlank
+    private String email;
+    @NotBlank
+    private String password;
+}
+FILE: ./src/main/java/com/ticket/classifier/dto/request/RegisterRequest.java
+==========================================
+package com.ticket.classifier.dto.request;
+
+import com.ticket.classifier.enums.Role;
+import com.ticket.classifier.enums.Team;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import lombok.Data;
+
+@Data
+public class RegisterRequest {
+    @NotBlank
+    private String name;
+    @Email @NotBlank
+    private String email;
+    @NotBlank
+    private String password;
+    private Role role;
+    private Team team;
+}
+FILE: ./src/main/java/com/ticket/classifier/dto/request/TicketRequest.java
+==========================================
+package com.ticket.classifier.dto.request;
+
+import jakarta.validation.constraints.NotBlank;
+import lombok.Data;
+
+@Data
+public class TicketRequest {
+    @NotBlank
+    private String title;
+    @NotBlank
+    private String description;
+}
+FILE: ./src/main/java/com/ticket/classifier/dto/response/LoginResponse.java
+==========================================
+package com.ticket.classifier.dto.response;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+
+@Data
+@AllArgsConstructor
+public class LoginResponse {
+    private String token;
+    private String role;
+    private String email;
+}
+FILE: ./src/main/java/com/ticket/classifier/dto/response/TicketResponse.java
+==========================================
+package com.ticket.classifier.dto.response;
+
+import com.ticket.classifier.enums.*;
+import lombok.Data;
+import java.time.LocalDateTime;
+
+@Data
+public class TicketResponse {
+    private Long id;
+    private String title;
+    private String description;
+    private Category category;
+    private Priority priority;
+    private TicketStatus status;
+    private Team assignedTeam;
+    private String suggestedResponse;
+    private Integer confidenceScore;
+    private boolean flaggedForReview;
+    private String createdBy;
+    private String assignedAgent;
+    private LocalDateTime createdAt;
+    private LocalDateTime resolvedAt;
+}
+FILE: ./src/main/java/com/ticket/classifier/entity/Ticket.java
+==========================================
+package com.ticket.classifier.entity;
+
+import com.ticket.classifier.enums.*;
+import jakarta.persistence.*;
+import lombok.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "tickets")
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+public class Ticket {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false)
+    private String title;
+
+    @Column(nullable = false, length = 2000)
+    private String description;
+
+    @Enumerated(EnumType.STRING)
+    private Category category;
+
+    @Enumerated(EnumType.STRING)
+    private Priority priority;
+
+    @Enumerated(EnumType.STRING)
+    private TicketStatus status;
+
+    @Enumerated(EnumType.STRING)
+    private Team assignedTeam;
+
+    private String suggestedResponse;
+
+    private Integer confidenceScore;
+
+    private boolean flaggedForReview;
+
+    @ManyToOne
+    @JoinColumn(name = "created_by")
+    private User createdBy;
+
+    @ManyToOne
+    @JoinColumn(name = "assigned_agent_id")
+    private User assignedAgent;
+
+    private LocalDateTime createdAt;
+    private LocalDateTime resolvedAt;
+
+    @PrePersist
+    void onCreate() { createdAt = LocalDateTime.now(); }
+}
+FILE: ./src/main/java/com/ticket/classifier/entity/User.java
+==========================================
+package com.ticket.classifier.entity;
+
+import com.ticket.classifier.enums.Role;
+import com.ticket.classifier.enums.Team;
+import jakarta.persistence.*;
+import lombok.*;
+
+@Entity
+@Table(name = "users")
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+public class User {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false)
+    private String name;
+
+    @Column(nullable = false, unique = true)
+    private String email;
+
+    @Column(nullable = false)
+    private String password;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private Role role;
+
+    @Enumerated(EnumType.STRING)
+    private Team team;
+}
+FILE: ./src/main/java/com/ticket/classifier/enums/Category.java
+==========================================
+package com.ticket.classifier.enums;
+public enum Category { BILLING, TECHNICAL, ACCOUNT, REFUND }
+FILE: ./src/main/java/com/ticket/classifier/enums/Priority.java
+==========================================
+package com.ticket.classifier.enums;
+public enum Priority { LOW, MEDIUM, HIGH, URGENT }
+FILE: ./src/main/java/com/ticket/classifier/enums/Role.java
+==========================================
+package com.ticket.classifier.enums;
+public enum Role { CUSTOMER, AGENT, ADMIN }
+FILE: ./src/main/java/com/ticket/classifier/enums/Team.java
+==========================================
+package com.ticket.classifier.enums;
+public enum Team { BILLING, TECHNICAL, ACCOUNT, REFUND, NONE }
+FILE: ./src/main/java/com/ticket/classifier/enums/TicketStatus.java
+==========================================
+package com.ticket.classifier.enums;
+public enum TicketStatus { OPEN, IN_PROGRESS, RESOLVED, FLAGGED }
+FILE: ./src/main/java/com/ticket/classifier/repository/TicketRepository.java
+==========================================
+package com.ticket.classifier.repository;
+
+import com.ticket.classifier.entity.Ticket;
+import com.ticket.classifier.enums.TicketStatus;
+import com.ticket.classifier.entity.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.List;
+
+public interface TicketRepository extends JpaRepository<Ticket, Long> {
+    List<Ticket> findByCreatedBy(User user);
+    List<Ticket> findByStatus(TicketStatus status);
+    List<Ticket> findByAssignedAgent(User agent);
+    List<Ticket> findByFlaggedForReviewTrue();
+}
+FILE: ./src/main/java/com/ticket/classifier/repository/UserRepository.java
+==========================================
+package com.ticket.classifier.repository;
+
+import com.ticket.classifier.entity.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.Optional;
+
+public interface UserRepository extends JpaRepository<User, Long> {
+    Optional<User> findByEmail(String email);
+    boolean existsByEmail(String email);
+}
+FILE: ./src/main/java/com/ticket/classifier/security/JwtFilter.java
+==========================================
+package com.ticket.classifier.security;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+
+@Component
+@RequiredArgsConstructor
+public class JwtFilter extends OncePerRequestFilter {
+
+    private final JwtUtil jwtUtil;
+    private final UserDetailsServiceImpl userDetailsService;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain)
+            throws ServletException, IOException {
+
+        String authHeader = request.getHeader("Authorization");
+
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7);
+            if (jwtUtil.isTokenValid(token)) {
+                String email = jwtUtil.extractEmail(token);
+                UserDetails userDetails = userDetailsService.loadUserByUsername(email);
+                UsernamePasswordAuthenticationToken authToken =
+                        new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authToken);
+            }
+        }
+
+        filterChain.doFilter(request, response);
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/security/JwtUtil.java
+==========================================
+package com.ticket.classifier.security;
+
+import io.jsonwebtoken.*;
+import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.security.Key;
+import java.util.Date;
+
+@Component
+public class JwtUtil {
+
+    @Value("${app.jwt.secret}")
+    private String secret;
+
+    @Value("${app.jwt.expiration}")
+    private long expiration;
+
+    private Key getSigningKey() {
+        return Keys.hmacShaKeyFor(secret.getBytes());
+    }
+
+    public String generateToken(String email) {
+        return Jwts.builder()
+                .setSubject(email)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + expiration))
+                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .compact();
+    }
+
+    public String extractEmail(String token) {
+        return Jwts.parserBuilder()
+                .setSigningKey(getSigningKey())
+                .build()
+                .parseClaimsJws(token)
+                .getBody()
+                .getSubject();
+    }
+
+    public boolean isTokenValid(String token) {
+        try {
+            Jwts.parserBuilder().setSigningKey(getSigningKey()).build().parseClaimsJws(token);
+            return true;
+        } catch (JwtException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/security/UserDetailsServiceImpl.java
+==========================================
+package com.ticket.classifier.security;
+
+import com.ticket.classifier.entity.User;
+import com.ticket.classifier.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.*;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+public class UserDetailsServiceImpl implements UserDetailsService {
+
+    private final UserRepository userRepository;
+
+    @Override
+    public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + email));
+
+        return new org.springframework.security.core.userdetails.User(
+                user.getEmail(),
+                user.getPassword(),
+                List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole().name()))
+        );
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/service/AdminService.java
+==========================================
+package com.ticket.classifier.service;
+
+import com.ticket.classifier.dto.response.TicketResponse;
+import com.ticket.classifier.entity.Ticket;
+import com.ticket.classifier.entity.User;
+import com.ticket.classifier.enums.TicketStatus;
+import com.ticket.classifier.repository.TicketRepository;
+import com.ticket.classifier.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Service
+@RequiredArgsConstructor
+public class AdminService {
+
+    private final TicketRepository ticketRepository;
+    private final UserRepository userRepository;
+    private final TicketService ticketService;
+
+    public List<TicketResponse> getAllTickets() {
+        return ticketRepository.findAll()
+                .stream().map(this::mapToResponse).collect(Collectors.toList());
+    }
+
+    public List<TicketResponse> getFlaggedTickets() {
+        return ticketRepository.findByFlaggedForReviewTrue()
+                .stream().map(this::mapToResponse).collect(Collectors.toList());
+    }
+
+    public List<TicketResponse> getTicketsByStatus(TicketStatus status) {
+        return ticketRepository.findByStatus(status)
+                .stream().map(this::mapToResponse).collect(Collectors.toList());
+    }
+
+    public List<User> getAllAgents() {
+        return userRepository.findAll()
+                .stream()
+                .filter(u -> u.getRole().name().equals("AGENT"))
+                .collect(Collectors.toList());
+    }
+
+    public TicketResponse assignTicketToAgent(Long ticketId, Long agentId) {
+        return ticketService.assignTicket(ticketId, agentId);
+    }
+
+    public TicketResponse resolveTicket(Long ticketId) {
+        return ticketService.resolveTicket(ticketId);
+    }
+
+    private TicketResponse mapToResponse(Ticket ticket) {
+        TicketResponse res = new TicketResponse();
+        res.setId(ticket.getId());
+        res.setTitle(ticket.getTitle());
+        res.setDescription(ticket.getDescription());
+        res.setCategory(ticket.getCategory());
+        res.setPriority(ticket.getPriority());
+        res.setStatus(ticket.getStatus());
+        res.setAssignedTeam(ticket.getAssignedTeam());
+        res.setSuggestedResponse(ticket.getSuggestedResponse());
+        res.setConfidenceScore(ticket.getConfidenceScore());
+        res.setFlaggedForReview(ticket.isFlaggedForReview());
+        res.setCreatedBy(ticket.getCreatedBy() != null ? ticket.getCreatedBy().getEmail() : null);
+        res.setAssignedAgent(ticket.getAssignedAgent() != null ? ticket.getAssignedAgent().getEmail() : null);
+        res.setCreatedAt(ticket.getCreatedAt());
+        res.setResolvedAt(ticket.getResolvedAt());
+        return res;
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/service/AuthService.java
+==========================================
+package com.ticket.classifier.service;
+
+import com.ticket.classifier.dto.request.LoginRequest;
+import com.ticket.classifier.dto.request.RegisterRequest;
+import com.ticket.classifier.dto.response.LoginResponse;
+import com.ticket.classifier.entity.User;
+import com.ticket.classifier.enums.Role;
+import com.ticket.classifier.enums.Team;
+import com.ticket.classifier.repository.UserRepository;
+import com.ticket.classifier.security.JwtUtil;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+
+@Service
+@RequiredArgsConstructor
+public class AuthService {
+
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final AuthenticationManager authenticationManager;
+    private final JwtUtil jwtUtil;
+
+    public String register(RegisterRequest request) {
+        if (userRepository.existsByEmail(request.getEmail())) {
+            throw new RuntimeException("Email already registered: " + request.getEmail());
+        }
+
+        Role role = request.getRole() != null ? request.getRole() : Role.CUSTOMER;
+        Team team = request.getTeam() != null ? request.getTeam() : Team.NONE;
+
+        User user = User.builder()
+                .name(request.getName())
+                .email(request.getEmail())
+                .password(passwordEncoder.encode(request.getPassword()))
+                .role(role)
+                .team(team)
+                .build();
+
+        userRepository.save(user);
+        return "User registered successfully";
+    }
+
+    public LoginResponse login(LoginRequest request) {
+        authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
+        );
+
+        User user = userRepository.findByEmail(request.getEmail())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        String token = jwtUtil.generateToken(user.getEmail());
+        return new LoginResponse(token, user.getRole().name(), user.getEmail());
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/service/EmailService.java
+==========================================
+package com.ticket.classifier.service;
+
+import com.ticket.classifier.entity.Ticket;
+import lombok.RequiredArgsConstructor;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.stereotype.Service;
+
+@Service
+@RequiredArgsConstructor
+public class EmailService {
+
+    private final JavaMailSender mailSender;
+
+    public void sendTicketConfirmation(String toEmail, String customerName, Ticket ticket) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setTo(toEmail);
+        message.setSubject("Ticket #" + ticket.getId() + " Received — " + ticket.getTitle());
+        message.setText("""
+                Hi %s,
+
+                Your support ticket has been received and classified.
+
+                Ticket ID   : #%d
+                Title       : %s
+                Category    : %s
+                Priority    : %s
+                Assigned To : %s Team
+                Status      : %s
+
+                Our suggested response:
+                "%s"
+
+                We will get back to you shortly.
+
+                — Support Team
+                """.formatted(
+                customerName,
+                ticket.getId(),
+                ticket.getTitle(),
+                ticket.getCategory(),
+                ticket.getPriority(),
+                ticket.getAssignedTeam(),
+                ticket.getStatus(),
+                ticket.getSuggestedResponse()
+        ));
+        mailSender.send(message);
+    }
+
+    public void sendResolutionNotice(String toEmail, String customerName, Ticket ticket) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setTo(toEmail);
+        message.setSubject("Ticket #" + ticket.getId() + " Resolved");
+        message.setText("""
+                Hi %s,
+
+                Your ticket #%d ("%s") has been marked as RESOLVED.
+
+                Thank you for reaching out. If you have further questions, feel free to raise a new ticket.
+
+                — Support Team
+                """.formatted(customerName, ticket.getId(), ticket.getTitle()));
+        mailSender.send(message);
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/service/GeminiService.java
+==========================================
+package com.ticket.classifier.service;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+
+@Service
+@RequiredArgsConstructor
+public class GeminiService {
+
+    @Value("${gemini.api.key}")
+    private String apiKey;
+
+    @Value("${gemini.api.url}")
+    private String apiUrl;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public String classify(String title, String description) {
+        String prompt = buildPrompt(title, description);
+        String requestBody = buildRequestBody(prompt);
+
+        try {
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(apiUrl + "?key=" + apiKey))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            System.out.println("=== GEMINI RAW RESPONSE ===");
+            System.out.println(response.body());
+            System.out.println("===========================");
+
+            return extractText(response.body());
+
+        } catch (Exception e) {
+            throw new RuntimeException("Gemini API call failed: " + e.getMessage(), e);
+        }
+    }
+
+    private String buildPrompt(String title, String description) {
+        return """
+                You are a support ticket classifier. Analyze the following support ticket and respond ONLY with a valid JSON object — no markdown, no explanation, no code fences.
+
+                Ticket Title: %s
+                Ticket Description: %s
+
+                Respond with this exact JSON structure:
+                {
+                  "category": "BILLING or TECHNICAL or ACCOUNT or REFUND",
+                  "priority": "LOW or MEDIUM or HIGH or URGENT",
+                  "assignedTeam": "BILLING or TECHNICAL or ACCOUNT or REFUND",
+                  "suggestedResponse": "A short professional reply to the customer",
+                  "confidenceScore": 85,
+                  "flaggedForReview": false
+                }
+                """.formatted(title, description);
+    }
+
+    private String buildRequestBody(String prompt) {
+        try {
+            return objectMapper.writeValueAsString(
+                    objectMapper.createObjectNode()
+                            .set("contents", objectMapper.createArrayNode()
+                                    .add(objectMapper.createObjectNode()
+                                            .set("parts", objectMapper.createArrayNode()
+                                                    .add(objectMapper.createObjectNode()
+                                                            .put("text", prompt)))))
+            );
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to build Gemini request body: " + e.getMessage());
+        }
+    }
+
+    private String extractText(String responseBody) {
+        try {
+            JsonNode root = objectMapper.readTree(responseBody);
+
+            // Handle API-level errors
+            if (root.has("error")) {
+                String errorMsg = root.path("error").path("message").asText("Unknown Gemini error");
+                throw new RuntimeException("Gemini API error: " + errorMsg);
+            }
+
+            JsonNode candidates = root.path("candidates");
+            if (candidates.isMissingNode() || !candidates.isArray() || candidates.isEmpty()) {
+                throw new RuntimeException("Gemini returned no candidates. Full response: " + responseBody);
+            }
+
+            JsonNode parts = candidates.get(0).path("content").path("parts");
+            if (parts.isMissingNode() || !parts.isArray() || parts.isEmpty()) {
+                throw new RuntimeException("Gemini returned no parts. Full response: " + responseBody);
+            }
+
+            return parts.get(0).path("text").asText();
+
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to parse Gemini response: " + responseBody, e);
+        }
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/service/TicketService.java
+==========================================
+package com.ticket.classifier.service;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ticket.classifier.dto.request.TicketRequest;
+import com.ticket.classifier.dto.response.TicketResponse;
+import com.ticket.classifier.entity.Ticket;
+import com.ticket.classifier.entity.User;
+import com.ticket.classifier.enums.*;
+import com.ticket.classifier.repository.TicketRepository;
+import com.ticket.classifier.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Service
+@RequiredArgsConstructor
+public class TicketService {
+
+    private final TicketRepository ticketRepository;
+    private final UserRepository userRepository;
+    private final GeminiService geminiService;
+    private final EmailService emailService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public TicketResponse createTicket(TicketRequest request) {
+        User currentUser = getCurrentUser();
+
+        // Call Gemini to classify
+        String geminiRaw = geminiService.classify(request.getTitle(), request.getDescription());
+        String geminiJson = cleanJson(geminiRaw);
+
+        Category category = Category.TECHNICAL;
+        Priority priority = Priority.MEDIUM;
+        Team assignedTeam = Team.TECHNICAL;
+        String suggestedResponse = "We have received your ticket and will respond shortly.";
+        int confidenceScore = 80;
+        boolean flaggedForReview = false;
+
+        try {
+            JsonNode node = objectMapper.readTree(geminiJson);
+            category = Category.valueOf(node.path("category").asText("TECHNICAL"));
+            priority = Priority.valueOf(node.path("priority").asText("MEDIUM"));
+            assignedTeam = Team.valueOf(node.path("assignedTeam").asText("TECHNICAL"));
+            suggestedResponse = node.path("suggestedResponse").asText(suggestedResponse);
+            confidenceScore = node.path("confidenceScore").asInt(80);
+            flaggedForReview = node.path("flaggedForReview").asBoolean(false);
+        } catch (Exception e) {
+            flaggedForReview = true; // fallback: flag if parse fails
+        }
+
+        Ticket ticket = Ticket.builder()
+                .title(request.getTitle())
+                .description(request.getDescription())
+                .category(category)
+                .priority(priority)
+                .assignedTeam(assignedTeam)
+                .suggestedResponse(suggestedResponse)
+                .confidenceScore(confidenceScore)
+                .flaggedForReview(flaggedForReview)
+                .status(TicketStatus.OPEN)
+                .createdBy(currentUser)
+                .build();
+
+        Ticket saved = ticketRepository.save(ticket);
+
+        // Send confirmation email to customer
+        emailService.sendTicketConfirmation(currentUser.getEmail(), currentUser.getName(), saved);
+
+        return mapToResponse(saved);
+    }
+
+    public List<TicketResponse> getMyTickets() {
+        User currentUser = getCurrentUser();
+        return ticketRepository.findByCreatedBy(currentUser)
+                .stream().map(this::mapToResponse).collect(Collectors.toList());
+    }
+
+    public TicketResponse getTicketById(Long id) {
+        Ticket ticket = ticketRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Ticket not found: " + id));
+        return mapToResponse(ticket);
+    }
+
+    public TicketResponse resolveTicket(Long id) {
+        Ticket ticket = ticketRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Ticket not found: " + id));
+        ticket.setStatus(TicketStatus.RESOLVED);
+        ticket.setResolvedAt(LocalDateTime.now());
+        return mapToResponse(ticketRepository.save(ticket));
+    }
+
+    public TicketResponse assignTicket(Long ticketId, Long agentId) {
+        Ticket ticket = ticketRepository.findById(ticketId)
+                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
+        User agent = userRepository.findById(agentId)
+                .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
+        ticket.setAssignedAgent(agent);
+        ticket.setStatus(TicketStatus.IN_PROGRESS);
+        return mapToResponse(ticketRepository.save(ticket));
+    }
+
+    private String cleanJson(String raw) {
+        // Remove markdown code fences if Gemini wraps in ```json ... ```
+        return raw.replaceAll("(?s)```json\\s*", "").replaceAll("(?s)```\\s*", "").trim();
+    }
+
+    private User getCurrentUser() {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Authenticated user not found"));
+    }
+
+    private TicketResponse mapToResponse(Ticket ticket) {
+        TicketResponse res = new TicketResponse();
+        res.setId(ticket.getId());
+        res.setTitle(ticket.getTitle());
+        res.setDescription(ticket.getDescription());
+        res.setCategory(ticket.getCategory());
+        res.setPriority(ticket.getPriority());
+        res.setStatus(ticket.getStatus());
+        res.setAssignedTeam(ticket.getAssignedTeam());
+        res.setSuggestedResponse(ticket.getSuggestedResponse());
+        res.setConfidenceScore(ticket.getConfidenceScore());
+        res.setFlaggedForReview(ticket.isFlaggedForReview());
+        res.setCreatedBy(ticket.getCreatedBy() != null ? ticket.getCreatedBy().getEmail() : null);
+        res.setAssignedAgent(ticket.getAssignedAgent() != null ? ticket.getAssignedAgent().getEmail() : null);
+        res.setCreatedAt(ticket.getCreatedAt());
+        res.setResolvedAt(ticket.getResolvedAt());
+        return res;
+    }
+}
+FILE: ./src/main/java/com/ticket/classifier/TicketClassifierApplication.java
+==========================================
+package com.ticket.classifier;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class TicketClassifierApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(TicketClassifierApplication.class, args);
+    }
+}
+FILE: ./src/main/resources/application.yml
+==========================================
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/ticket_classifier
+    username: ticket_user
+    password: Ticket@123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: bhaveshpp830@gmail.com
+    password: tgseehntnmlegkuh
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+server:
+  port: 8080
+
+app:
+  jwt:
+    secret: thisIsAVeryLongSecretKeyForJWTTokenGenerationThatIsAtLeast256BitsLong
+    expiration: 86400000
+
+gemini:
+  api:
+    key: AIzaSyCPdney2XSWivPpAdQ0-xAnVKuuHxhTI9k
+    url: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent
